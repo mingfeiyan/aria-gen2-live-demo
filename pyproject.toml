@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aria-gen2-demo"
+version = "0.1.0"
+description = "Aria Research Kit Gen 2 demo: stream glasses data to a laptop, visualize all streams in Rerun, see processed analytics, and talk to a Claude agent about the live stream"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "numpy",
+    "rerun-sdk>=0.17",
+]
+
+[project.optional-dependencies]
+# Replay real Gen 2 VRS recordings
+vrs = ["projectaria-tools"]
+# Claude-powered Q&A over the live stream
+agent = ["anthropic"]
+dev = ["pytest"]
+
+[project.scripts]
+aria-gen2-demo = "aria_gen2_demo.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aria_gen2_demo*"]
