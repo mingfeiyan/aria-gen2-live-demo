@@ -69,7 +69,8 @@ class LiveState:
     """Latest values + short histories from every stream, safe across threads."""
 
     def __init__(self, history_len: int = 2000):
-        self._lock = threading.Lock()
+        # Reentrant so code holding locked() can still call the helpers below.
+        self._lock = threading.RLock()
         self.start_ts_ns: Optional[int] = None
         self.latest_ts_ns: int = 0
         self.frame_counts: Dict[str, int] = collections.defaultdict(int)
@@ -86,7 +87,13 @@ class LiveState:
         self.events: Deque[ProcessedEvent] = collections.deque(maxlen=200)
         self.baro_pressure_pa: float = float("nan")
 
-    # All mutation goes through update() so readers get consistent snapshots.
+    # All mutation happens under the lock — single top-level fields via
+    # update(), related groups of nested fields via `with state.locked():` —
+    # so readers get consistent snapshots.
+    def locked(self) -> threading.RLock:
+        """Lock to hold while mutating (or reading) related fields atomically."""
+        return self._lock
+
     def update(self, **kwargs) -> None:
         with self._lock:
             for key, value in kwargs.items():
@@ -109,6 +116,16 @@ class LiveState:
     def recent_events(self, n: int = 15) -> List[ProcessedEvent]:
         with self._lock:
             return list(self.events)[-n:]
+
+    def gaze_history_snapshot(self) -> List[Tuple[int, float, float]]:
+        """Copy of gaze_history safe to read from other threads."""
+        with self._lock:
+            return list(self.gaze_history)
+
+    def gaze_overlay(self) -> Tuple[Optional[Tuple[float, float]], bool]:
+        """(pixel_xy, is_fixating) read atomically, for drawing gaze markers."""
+        with self._lock:
+            return self.gaze.pixel_xy, self.gaze.is_fixating
 
     def snapshot_status(self) -> dict:
         """A JSON-friendly summary used by the AI agent's tools."""

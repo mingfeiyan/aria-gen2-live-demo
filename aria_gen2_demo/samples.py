@@ -63,8 +63,12 @@ class ImuSample:
 @dataclass
 class EyeGazeSample:
     timestamp_ns: int
-    yaw_rad: float  # combined gaze yaw in CPF frame
-    pitch_rad: float  # combined gaze pitch in CPF frame
+    # CPF (central pupil frame) convention, matching projectaria_tools:
+    # x right, y down, z forward — so positive yaw looks toward the wearer's
+    # right and positive pitch looks DOWN. All sources must emit this
+    # convention; the gaze projector and heatmap assume it.
+    yaw_rad: float  # combined gaze yaw in CPF frame (positive = right)
+    pitch_rad: float  # combined gaze pitch in CPF frame (positive = down)
     depth_m: float  # estimated vergence depth (0 if unknown)
     # Optional 3D gaze data in device frame
     origin_device: Optional[np.ndarray] = None  # (3,)

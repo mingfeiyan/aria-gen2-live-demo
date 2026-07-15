@@ -33,8 +33,10 @@ class SceneProcessor:
     def update_image(self, frame: ImageFrame) -> Tuple[float, float, float]:
         """Returns (brightness, sharpness, frame_motion) for an RGB frame."""
         img = frame.image
-        gray = img.mean(axis=2) if img.ndim == 3 else img.astype(np.float64)
-        small = gray[::8, ::8].astype(np.float64)
+        # stride BEFORE the channel mean: analytics only use the 1/8 grid,
+        # and the results are identical at 1/64 the cost
+        sub = img[::8, ::8]
+        small = sub.mean(axis=2) if sub.ndim == 3 else sub.astype(np.float64)
 
         brightness = float(small.mean())
         gy, gx = np.gradient(small)

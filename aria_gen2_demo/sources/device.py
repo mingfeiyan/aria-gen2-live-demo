@@ -81,6 +81,7 @@ class DeviceStreamSource(StreamSource):
         self._profile = profile
         self._client = None
         self._observer = None
+        self._unknown_camera_ids: set = set()
 
     def _put(self, sample: Sample) -> None:
         # Drop oldest on overflow: live viewing should prefer freshness.
@@ -100,9 +101,19 @@ class DeviceStreamSource(StreamSource):
         class Observer:
             def on_image_received(self, image: np.ndarray, record) -> None:
                 camera_id = getattr(record, "camera_id", None)
-                label = _CAMERA_ID_TO_LABEL.get(
-                    str(camera_id).split(".")[-1].lower(), "camera-rgb"
-                )
+                key = str(camera_id).split(".")[-1].lower()
+                label = _CAMERA_ID_TO_LABEL.get(key)
+                if label is None:
+                    # Never guess "camera-rgb": a mislabeled grayscale frame
+                    # would poison everything derived from the RGB stream
+                    # (agent vision frame, scene analytics, gaze projection).
+                    label = f"camera-{key}"
+                    if key not in source._unknown_camera_ids:
+                        source._unknown_camera_ids.add(key)
+                        print(
+                            f"[device] Unmapped camera id {camera_id!r} — "
+                            f"logging it as '{label}'"
+                        )
                 source._put(
                     ImageFrame(label, int(record.capture_timestamp_ns), image)
                 )

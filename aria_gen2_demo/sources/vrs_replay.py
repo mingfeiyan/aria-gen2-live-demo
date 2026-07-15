@@ -194,7 +194,7 @@ class VrsReplaySource(StreamSource):
                     vio.capture_timestamp_ns,
                     translation,
                     np.asarray(quat).reshape(4),
-                    None,
+                    _vio_linear_velocity(vio),
                 )
 
             elif dtype == SensorDataType.BAROMETER:
@@ -213,14 +213,19 @@ class VrsReplaySource(StreamSource):
 
             elif dtype == SensorDataType.AUDIO:
                 audio_data, record = data.audio_data_and_record()
-                raw = np.asarray(audio_data.data, dtype=np.float32)
+                raw = np.asarray(audio_data.data)
                 timestamps = record.capture_timestamps_ns
                 if raw.size == 0 or len(timestamps) == 0:
                     continue
                 # Downmix interleaved multichannel audio to mono
                 num_channels = max(1, raw.size // max(1, len(timestamps)))
-                mono = raw.reshape(-1, num_channels).mean(axis=1)
-                mono /= max(1.0, np.abs(mono).max())
+                mono = raw.reshape(-1, num_channels).mean(axis=1).astype(np.float32)
+                # Scale integer PCM to [-1, 1] by a FIXED full-scale divisor
+                # (Aria mics record 32-bit PCM). Normalizing each chunk by its
+                # own peak would erase absolute loudness and make silence
+                # trip the speech-activity threshold.
+                if np.abs(mono).max() > 1.0:
+                    mono /= float(2**31)
                 yield AudioChunk(int(timestamps[0]), mono, 48000)
 
 
@@ -230,6 +235,21 @@ def _unit_vector_from_yaw_pitch(yaw: float, pitch: float) -> np.ndarray:
         dtype=np.float64,
     )
     return v / np.linalg.norm(v)
+
+
+def _vio_linear_velocity(vio) -> Optional[np.ndarray]:
+    """Device linear velocity from a VIO record, across projectaria_tools
+    API variants. Consumers only use the norm, so the frame (odometry vs
+    device) does not matter."""
+    for attr in (
+        "device_linear_velocity_odometry",
+        "linear_velocity_in_odometry",
+        "device_linear_velocity",
+    ):
+        vel = getattr(vio, attr, None)
+        if vel is not None:
+            return np.asarray(vel, dtype=np.float64).reshape(3)
+    return None
 
 
 def _vio_is_good(vio) -> bool:
