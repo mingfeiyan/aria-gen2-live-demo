@@ -92,16 +92,20 @@ class SyntheticSource(StreamSource):
         return np.array([2.0 * math.cos(ang), 2.0 * math.sin(ang), 1.6 + bounce])
 
     def _gaze_target(self, t: float):
-        """Gaze dwells on the poster nearest the current heading, with saccades."""
+        """Gaze dwells on the poster nearest the current heading, with saccades.
+
+        Returns (yaw, pitch) in the CPF convention EyeGazeSample requires:
+        positive pitch looks DOWN, so a poster at elevation +el gives -el.
+        """
         heading = self._heading(t)
         best = min(POSTERS, key=lambda p: abs(_wrap(p[0] - heading)))
         yaw = _wrap(best[0] - heading)
-        pitch = best[1]
+        elevation = best[1]
         # saccade jitter + occasional look-away
         yaw += 0.02 * math.sin(9.0 * t) + (0.25 if (t % 11.0) < 0.8 else 0.0)
-        pitch += 0.015 * math.cos(7.0 * t)
+        elevation += 0.015 * math.cos(7.0 * t)
         # clamp into camera FOV
-        return float(np.clip(yaw, -0.55, 0.55)), float(np.clip(pitch, -0.4, 0.4))
+        return float(np.clip(yaw, -0.55, 0.55)), float(-np.clip(elevation, -0.4, 0.4))
 
     def _hand_visible(self, t: float) -> bool:
         return (t % 14.0) < 5.0  # hand raised for 5 s out of every 14 s
@@ -242,8 +246,10 @@ class SyntheticSource(StreamSource):
 
         def gaze(t):
             yaw, pitch = self._gaze_target(t)
+            # device frame is x right, y down, z forward, so CPF pitch
+            # (down-positive) maps directly onto +y
             direction = np.array(
-                [math.sin(yaw), -math.sin(pitch), math.cos(yaw) * math.cos(pitch)]
+                [math.sin(yaw), math.sin(pitch), math.cos(yaw) * math.cos(pitch)]
             )
             direction /= np.linalg.norm(direction)
             return [

@@ -38,6 +38,13 @@ class StreamSource(abc.ABC):
     def samples(self) -> Iterator[Sample]:
         """Yield samples in (approximately) device-time order, real-time paced."""
 
+    @property
+    def rgb_calibration(self):
+        """projectaria_tools CameraCalibration for camera-rgb, if the source
+        has one (VRS replay does). None makes the gaze projector fall back to
+        its synthetic-matched pinhole model."""
+        return None
+
     def close(self) -> None:  # optional cleanup
         pass
 

@@ -85,7 +85,7 @@ class StreamAgent:
             Args:
                 seconds: How far back to look, in seconds.
             """
-            history = list(state_ref.gaze_history)
+            history = state_ref.gaze_history_snapshot()
             if not history:
                 return json.dumps({"samples": []})
             latest = history[-1][0]
@@ -112,9 +112,8 @@ class StreamAgent:
         content: list = []
         frame = self._state.get_rgb_frame()
         if frame is not None:
-            marked = draw_gaze_marker(
-                frame, self._state.gaze.pixel_xy, self._state.gaze.is_fixating
-            )
+            pixel_xy, is_fixating = self._state.gaze_overlay()
+            marked = draw_gaze_marker(frame, pixel_xy, is_fixating)
             content.append(frame_to_image_block(marked))
             content.append(
                 {"type": "text", "text": f"[current first-person frame]\n{question}"}

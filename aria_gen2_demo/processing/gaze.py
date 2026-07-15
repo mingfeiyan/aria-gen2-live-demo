@@ -28,6 +28,12 @@ from ..samples import EyeGazeSample
 FIXATION_WINDOW_S = 0.25
 FIXATION_DISPERSION_RAD = 0.03  # ~1.7 degrees
 
+# Attention-heatmap coverage in gaze-angle space. Real Aria eye gaze reaches
+# roughly +/-1 rad; samples outside the range are dropped rather than piled
+# into the border bins.
+HEATMAP_YAW_RANGE_RAD = 1.0
+HEATMAP_PITCH_RANGE_RAD = 0.8
+
 
 class GazeProcessor:
     def __init__(
@@ -43,6 +49,15 @@ class GazeProcessor:
         self._image_size = image_size
         self._focal = focal_px
         self._calib = camera_calib
+        # camera-from-device is constant; fetch + invert it once, not per point
+        self._T_camera_device = None
+        if camera_calib is not None:
+            try:
+                self._T_camera_device = (
+                    camera_calib.get_transform_device_camera().inverse()
+                )
+            except Exception:
+                self._calib = None  # unusable calibration -> pinhole fallback
         self._window: Deque[EyeGazeSample] = collections.deque()
         self._fixation_start_ns: Optional[int] = None
         self.heatmap = np.zeros((heatmap_size, heatmap_size), dtype=np.float64)
@@ -58,15 +73,15 @@ class GazeProcessor:
                     gaze.origin_device
                     + gaze.direction_device * max(gaze.depth_m, 0.35)
                 )
-                point_camera = (
-                    self._calib.get_transform_device_camera().inverse() @ point_device
-                )
+                point_camera = self._T_camera_device @ point_device
                 pixel = self._calib.project(np.asarray(point_camera).reshape(3))
                 if pixel is None:
                     return None
                 return float(pixel[0]), float(pixel[1])
             except Exception:
                 pass  # fall through to pinhole
+        # CPF convention: +yaw looks right, +pitch looks DOWN — both map to
+        # increasing pixel coordinates.
         w, h = self._image_size
         x = w / 2 + self._focal * math.tan(gaze.yaw_rad)
         y = h / 2 + self._focal * math.tan(gaze.pitch_rad)
@@ -82,9 +97,7 @@ class GazeProcessor:
         """
         if self._calib is not None:
             try:
-                point_camera = (
-                    self._calib.get_transform_device_camera().inverse() @ point_device
-                )
+                point_camera = self._T_camera_device @ point_device
                 pixel = self._calib.project(np.asarray(point_camera).reshape(3))
                 if pixel is None:
                     return float("nan"), float("nan")
@@ -122,11 +135,23 @@ class GazeProcessor:
             duration = 0.0
 
         # accumulate attention heatmap in normalized gaze-angle space
-        n = self.heatmap.shape[0]
-        gx = int(np.clip((gaze.yaw_rad + 0.6) / 1.2 * (n - 1), 0, n - 1))
-        gy = int(np.clip((gaze.pitch_rad + 0.5) / 1.0 * (n - 1), 0, n - 1))
         self.heatmap *= 0.999  # slow decay so the map stays current
-        self.heatmap[gy, gx] += 1.0
+        if (
+            abs(gaze.yaw_rad) <= HEATMAP_YAW_RANGE_RAD
+            and abs(gaze.pitch_rad) <= HEATMAP_PITCH_RANGE_RAD
+        ):
+            n = self.heatmap.shape[0]
+            gx = int(
+                (gaze.yaw_rad + HEATMAP_YAW_RANGE_RAD)
+                / (2 * HEATMAP_YAW_RANGE_RAD)
+                * (n - 1)
+            )
+            gy = int(
+                (gaze.pitch_rad + HEATMAP_PITCH_RANGE_RAD)
+                / (2 * HEATMAP_PITCH_RANGE_RAD)
+                * (n - 1)
+            )
+            self.heatmap[gy, gx] += 1.0
 
         return fixating, duration
 

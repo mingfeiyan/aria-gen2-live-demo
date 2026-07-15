@@ -78,3 +78,34 @@ def test_gaze_projection_matches_synthetic_camera():
 
     frame = ImageFrame("camera-rgb", 0, np.zeros((512, 512, 3), dtype=np.uint8))
     assert frame.image.shape == (512, 512, 3)
+
+
+def test_gaze_projection_cpf_convention():
+    """CPF convention: +yaw looks right (image right), +pitch looks DOWN."""
+    from aria_gen2_demo.processing.gaze import GazeProcessor
+    from aria_gen2_demo.samples import EyeGazeSample
+
+    proc = GazeProcessor(image_size=(512, 512), focal_px=400.0)
+    right = proc.project_to_rgb(EyeGazeSample(0, yaw_rad=0.2, pitch_rad=0.0, depth_m=1.0))
+    down = proc.project_to_rgb(EyeGazeSample(0, yaw_rad=0.0, pitch_rad=0.2, depth_m=1.0))
+    assert right is not None and right[0] > 256 and abs(right[1] - 256) < 1e-9
+    assert down is not None and down[1] > 256 and abs(down[0] - 256) < 1e-9
+
+
+def test_synthetic_gaze_angles_agree_with_3d_direction():
+    """The 2D projection (from yaw/pitch) and the 3D gaze ray
+    (direction_device, which drives the world view) must land on ~the same
+    RGB pixel — the vertical axis was mirrored between them once."""
+    from aria_gen2_demo.processing.gaze import GazeProcessor
+    from aria_gen2_demo.samples import EyeGazeSample
+    from aria_gen2_demo.sources.synthetic import RGB_FOCAL, RGB_SIZE, SyntheticSource
+
+    src = SyntheticSource(duration_s=2.0, speedup=0)
+    sample = next(s for s in src.samples() if isinstance(s, EyeGazeSample))
+    proc = GazeProcessor(image_size=(RGB_SIZE, RGB_SIZE), focal_px=RGB_FOCAL)
+    from_angles = proc.project_to_rgb(sample)
+    from_ray = proc.project_device_point(sample.direction_device)
+    assert from_angles is not None and not np.any(np.isnan(from_ray))
+    # small tolerance: tan-per-axis vs true perspective differ slightly
+    assert abs(from_angles[0] - from_ray[0]) < 5
+    assert abs(from_angles[1] - from_ray[1]) < 5

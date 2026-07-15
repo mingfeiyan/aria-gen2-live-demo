@@ -36,6 +36,7 @@ class MotionProcessor:
 
     def __init__(self):
         self._window: Deque[Tuple[int, float]] = collections.deque()
+        self._window_sumsq: float = 0.0  # running sum of squared deviations
         self._last_step_ns: int = 0
         self._prev_mag: float = GRAVITY
         self._rising: bool = False
@@ -47,11 +48,18 @@ class MotionProcessor:
         mag = float(np.linalg.norm(imu.accel_msec2))
         deviation = mag - GRAVITY
         self._window.append((imu.timestamp_ns, deviation))
+        self._window_sumsq += deviation * deviation
         cutoff = imu.timestamp_ns - int(WINDOW_S * 1e9)
         while self._window and self._window[0][0] < cutoff:
-            self._window.popleft()
+            _, old = self._window.popleft()
+            self._window_sumsq -= old * old
 
-        energy = float(np.sqrt(np.mean([d * d for _, d in self._window])))
+        # incremental RMS: this runs per IMU sample, so O(window) recompute
+        # would dominate the pipeline at real IMU rates (max() guards the
+        # running sum against float drift going slightly negative)
+        energy = float(
+            np.sqrt(max(self._window_sumsq, 0.0) / len(self._window))
+        )
 
         # step detection: rising-edge peaks on accel magnitude
         if mag > self._prev_mag:
@@ -72,7 +80,7 @@ class MotionProcessor:
         elif energy < WALKING_ENERGY:
             activity = "walking"
         else:
-            activity = "moving vigorously"
+            activity = "moving"  # keep in the documented still|walking|moving set
 
         message = None
         if activity != self.activity and self.activity != "unknown":

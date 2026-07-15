@@ -54,12 +54,10 @@ class Pipeline:
         self.source = source
         self.dashboard = dashboard
         self.state = state or LiveState()
-        rgb_calib = getattr(source, "rgb_calibration", None)
-        self.gaze_proc = GazeProcessor(camera_calib=rgb_calib)
+        self.gaze_proc = GazeProcessor(camera_calib=source.rgb_calibration)
         self.hand_proc = HandProcessor()
         self.motion_proc = MotionProcessor()
         self.scene_proc = SceneProcessor()
-        self._last_gaze: Optional[EyeGazeSample] = None
         self._last_heatmap_ns = 0
         self._stop = threading.Event()
 
@@ -88,11 +86,13 @@ class Pipeline:
             if sample.stream_label == "camera-rgb":
                 h, w = sample.image.shape[:2]
                 self.gaze_proc.set_image_size(w, h)
-                state.update(latest_rgb=sample.image, latest_rgb_ts_ns=sample.timestamp_ns)
                 brightness, sharpness, motion = self.scene_proc.update_image(sample)
-                state.scene.brightness = brightness
-                state.scene.sharpness = sharpness
-                state.scene.frame_motion = motion
+                with state.locked():
+                    state.latest_rgb = sample.image
+                    state.latest_rgb_ts_ns = sample.timestamp_ns
+                    state.scene.brightness = brightness
+                    state.scene.sharpness = sharpness
+                    state.scene.frame_motion = motion
                 dash.log_scene(sample.timestamp_ns, brightness, sharpness, motion)
                 if sample.timestamp_ns - self._last_heatmap_ns > HEATMAP_LOG_PERIOD_NS:
                     self._last_heatmap_ns = sample.timestamp_ns
@@ -105,26 +105,27 @@ class Pipeline:
             dash.log_imu(sample)
             if sample.stream_label == "imu-left":
                 activity, energy, steps, message = self.motion_proc.update(sample)
-                state.motion.activity = activity
-                state.motion.accel_energy = energy
-                state.motion.step_count = steps
+                with state.locked():
+                    state.motion.activity = activity
+                    state.motion.accel_energy = energy
+                    state.motion.step_count = steps
                 dash.log_motion(sample.timestamp_ns, energy, steps)
                 if message:
                     self._event(sample.timestamp_ns, "activity", message)
 
         elif isinstance(sample, EyeGazeSample):
             state.tick(sample.timestamp_ns)
-            self._last_gaze = sample
             fixating, duration = self.gaze_proc.update(sample)
             pixel = self.gaze_proc.project_to_rgb(sample)
-            was_fixating = state.gaze.is_fixating
-            state.gaze.pixel_xy = pixel
-            state.gaze.is_fixating = fixating
-            state.gaze.fixation_duration_s = duration
-            state.gaze.depth_m = sample.depth_m
-            state.gaze_history.append(
-                (sample.timestamp_ns, sample.yaw_rad, sample.pitch_rad)
-            )
+            with state.locked():
+                was_fixating = state.gaze.is_fixating
+                state.gaze.pixel_xy = pixel
+                state.gaze.is_fixating = fixating
+                state.gaze.fixation_duration_s = duration
+                state.gaze.depth_m = sample.depth_m
+                state.gaze_history.append(
+                    (sample.timestamp_ns, sample.yaw_rad, sample.pitch_rad)
+                )
             dash.log_gaze(sample, pixel, fixating)
             if fixating and not was_fixating:
                 self._event(sample.timestamp_ns, "fixation", "Gaze fixation started")
@@ -132,10 +133,11 @@ class Pipeline:
         elif isinstance(sample, HandPoseSample):
             state.tick(sample.timestamp_ns)
             pinching, changed, distance, message = self.hand_proc.update(sample)
-            state.hands.left_visible = sample.left_landmarks_device is not None
-            state.hands.right_visible = sample.right_landmarks_device is not None
-            state.hands.pinching = pinching
-            state.hands.pinch_distance_m = distance
+            with state.locked():
+                state.hands.left_visible = sample.left_landmarks_device is not None
+                state.hands.right_visible = sample.right_landmarks_device is not None
+                state.hands.pinching = pinching
+                state.hands.pinch_distance_m = distance
             pixel_landmarks = []
             for label, lm in (
                 ("left", sample.left_landmarks_device),
@@ -152,14 +154,18 @@ class Pipeline:
 
         elif isinstance(sample, VioSample):
             state.tick(sample.timestamp_ns)
-            state.trajectory.append(sample.translation_world)
-            if sample.linear_velocity is not None:
-                state.motion.speed_ms = float(np.linalg.norm(sample.linear_velocity))
-            dash.log_vio(sample, list(state.trajectory))
+            with state.locked():
+                state.trajectory.append(sample.translation_world)
+                if sample.linear_velocity is not None:
+                    state.motion.speed_ms = float(
+                        np.linalg.norm(sample.linear_velocity)
+                    )
+                trajectory = list(state.trajectory)
+            dash.log_vio(sample, trajectory)
 
         elif isinstance(sample, BaroSample):
             state.tick(sample.timestamp_ns)
-            state.baro_pressure_pa = sample.pressure_pa
+            state.update(baro_pressure_pa=sample.pressure_pa)
             dash.log_baro(sample)
 
         elif isinstance(sample, MagSample):
@@ -169,7 +175,8 @@ class Pipeline:
         elif isinstance(sample, AudioChunk):
             state.tick(sample.timestamp_ns)
             rms, active, message = self.scene_proc.update_audio(sample)
-            state.scene.speech_active = active
+            with state.locked():
+                state.scene.speech_active = active
             dash.log_audio(sample, rms)
             if message:
                 self._event(sample.timestamp_ns, "speech", message)
